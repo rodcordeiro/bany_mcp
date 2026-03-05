@@ -11,6 +11,7 @@ MCP server em Node.js + TypeScript para analise e acompanhamento de transacoes d
   - `transactions_timeline`: serie diaria de entradas/saidas/saldo
   - `transactions_list`: listagem paginada com filtros
   - `transactions_detect_anomalies`: deteccao de anomalias de gasto
+  - `transactions_credit_card_spending`: total gasto em contas de cartao de credito no periodo
 
 ## Requisitos
 

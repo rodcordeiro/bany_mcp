@@ -30,6 +30,12 @@ export type AnomalyParams = {
   limit: number;
 };
 
+export type CreditCardSpendingParams = {
+  ownerId: string;
+  days: number;
+  limit: number;
+};
+
 type TotalsRow = RowDataPacket & {
   income: number | null;
   expense: number | null;
@@ -75,12 +81,67 @@ type AnomalyRow = RowDataPacket & {
   baseline_total: number | null;
 };
 
+type CreditCardTotalsRow = RowDataPacket & {
+  total_expense: number | null;
+  transactions: number | null;
+};
+
+type CreditCardAccountRow = RowDataPacket & {
+  account_id: string | null;
+  account_name: string | null;
+  payment_name: string | null;
+  total_expense: number | null;
+  transactions: number | null;
+};
+
+const columnCache = new Map<string, boolean>();
+
 function toNumber(value: unknown): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+async function hasColumn(pool: Pool, tableName: string, columnName: string) {
+  const cacheKey = `${tableName}:${columnName}`;
+  const cached = columnCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `
+      select count(*) as total
+      from information_schema.columns
+      where table_schema = database()
+        and table_name = ?
+        and column_name = ?
+    `,
+    [tableName, columnName]
+  );
+
+  const exists = toNumber(rows[0]?.total) > 0;
+  columnCache.set(cacheKey, exists);
+  return exists;
+}
+
+async function hasTransactionColumn(pool: Pool, columnName: string) {
+  return hasColumn(pool, 'bk_tb_transactions', columnName);
+}
+
+async function hasCategoryColumn(pool: Pool, columnName: string) {
+  return hasColumn(pool, 'bk_tb_categories', columnName);
+}
+
 export async function getOverview(pool: Pool, params: OverviewParams) {
+  const [hasSyncStatus, hasIntegrated] = await Promise.all([
+    hasTransactionColumn(pool, 'sync_status'),
+    hasTransactionColumn(pool, 'integrated'),
+  ]);
+
+  const pendingExpression = hasSyncStatus
+    ? "coalesce(sum(case when sync_status in ('pending', 'processing', 'error') then 1 else 0 end), 0)"
+    : hasIntegrated
+      ? 'coalesce(sum(case when coalesce(integrated, 0) = 0 then 1 else 0 end), 0)'
+      : '0';
+
   const [totalsRows] = await pool.query<TotalsRow[]>(
     `
       select
@@ -98,7 +159,7 @@ export async function getOverview(pool: Pool, params: OverviewParams) {
   const [pendingRows] = await pool.query<PendingRow[]>(
     `
       select
-        coalesce(sum(case when sync_status in ('pending', 'processing', 'error') then 1 else 0 end), 0) as pending_sync
+        ${pendingExpression} as pending_sync
       from bk_tb_transactions
       where owner = ?
     `,
@@ -177,13 +238,18 @@ export async function getTimeline(pool: Pool, params: TimelineParams) {
 }
 
 export async function listTransactions(pool: Pool, params: ListTransactionsParams) {
+  const [hasSyncStatus, hasSyncError] = await Promise.all([
+    hasTransactionColumn(pool, 'sync_status'),
+    hasTransactionColumn(pool, 'sync_error'),
+  ]);
+
   const conditions: string[] = [
     't.owner = ?',
     "date(coalesce(t.date, t.created_at, current_timestamp)) >= date_sub(curdate(), interval ? day)",
   ];
   const values: unknown[] = [params.ownerId, params.days];
 
-  if (params.status !== 'all') {
+  if (params.status !== 'all' && hasSyncStatus) {
     conditions.push('t.sync_status = ?');
     values.push(params.status);
   }
@@ -205,8 +271,8 @@ export async function listTransactions(pool: Pool, params: ListTransactionsParam
       t.value,
       coalesce(t.date, t.created_at, current_timestamp) as date,
       t.created_at,
-      t.sync_status,
-      t.sync_error,
+      ${hasSyncStatus ? 't.sync_status' : "'pending'"} as sync_status,
+      ${hasSyncError ? 't.sync_error' : 'null'} as sync_error,
       t.batch_id,
       a.name as account_name,
       c.name as category_name
@@ -237,6 +303,70 @@ export async function listTransactions(pool: Pool, params: ListTransactionsParam
       batchId: row.batch_id,
       accountName: row.account_name ?? 'Conta desconhecida',
       categoryName: row.category_name ?? 'Categoria desconhecida',
+    })),
+  };
+}
+
+export async function getCreditCardSpending(pool: Pool, params: CreditCardSpendingParams) {
+  const hasCategoryInternal = await hasCategoryColumn(pool, 'internal');
+  const internalFilter = hasCategoryInternal ? 'and coalesce(c.internal, 0) = 0' : '';
+  const cardPaymentFilter =
+    "(lower(coalesce(p.name, '')) like '%credito%' or lower(coalesce(p.name, '')) like '%credit%' or lower(coalesce(p.name, '')) like '%cartao%')";
+
+  const [totalsRows] = await pool.query<CreditCardTotalsRow[]>(
+    `
+      select
+        coalesce(sum(t.value), 0) as total_expense,
+        count(*) as transactions
+      from bk_tb_transactions t
+      inner join bk_tb_accounts a on a.id = t.account
+      inner join bk_tb_payments p on p.id = a.paymentType
+      inner join bk_tb_categories c on c.id = t.category
+      where t.owner = ?
+        and c.positive = 0
+        ${internalFilter}
+        and ${cardPaymentFilter}
+        and date(coalesce(t.date, t.created_at, current_timestamp)) >= date_sub(curdate(), interval ? day)
+    `,
+    [params.ownerId, params.days]
+  );
+
+  const [accountsRows] = await pool.query<CreditCardAccountRow[]>(
+    `
+      select
+        a.id as account_id,
+        a.name as account_name,
+        p.name as payment_name,
+        coalesce(sum(t.value), 0) as total_expense,
+        count(*) as transactions
+      from bk_tb_transactions t
+      inner join bk_tb_accounts a on a.id = t.account
+      inner join bk_tb_payments p on p.id = a.paymentType
+      inner join bk_tb_categories c on c.id = t.category
+      where t.owner = ?
+        and c.positive = 0
+        ${internalFilter}
+        and ${cardPaymentFilter}
+        and date(coalesce(t.date, t.created_at, current_timestamp)) >= date_sub(curdate(), interval ? day)
+      group by a.id, a.name, p.name
+      order by total_expense desc
+      limit ?
+    `,
+    [params.ownerId, params.days, params.limit]
+  );
+
+  const totals = totalsRows[0];
+
+  return {
+    periodDays: params.days,
+    totalExpense: toNumber(totals?.total_expense),
+    transactions: toNumber(totals?.transactions),
+    accounts: accountsRows.map((row) => ({
+      accountId: row.account_id ?? 'unknown',
+      accountName: row.account_name ?? 'Conta desconhecida',
+      paymentName: row.payment_name ?? 'Forma de pagamento desconhecida',
+      totalExpense: toNumber(row.total_expense),
+      transactions: toNumber(row.transactions),
     })),
   };
 }

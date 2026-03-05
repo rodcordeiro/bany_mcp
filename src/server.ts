@@ -10,6 +10,7 @@ import { z } from 'zod';
 import type { AppConfig } from './config.js';
 import {
   detectExpenseAnomalies,
+  getCreditCardSpending,
   getOverview,
   getTimeline,
   listTransactions,
@@ -44,6 +45,12 @@ const anomaliesInputSchema = z.object({
   minIncreasePercent: z.number().min(1).max(1000).optional(),
   minAbsoluteDelta: z.number().min(0).max(1_000_000).optional(),
   limit: z.number().int().min(1).max(50).optional(),
+});
+
+const creditCardSpendingInputSchema = z.object({
+  ownerId: z.string().min(1).optional(),
+  days: z.number().int().min(1).max(365).optional(),
+  limit: z.number().int().min(1).max(100).optional(),
 });
 
 function parseArgs(args: unknown): Record<string, unknown> {
@@ -158,6 +165,19 @@ export async function startMcpServer(pool: Pool, config: AppConfig) {
             additionalProperties: false,
           },
         },
+        {
+          name: 'transactions_credit_card_spending',
+          description: 'Returns total expense on credit card accounts in the selected period.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              ownerId: { type: 'string' },
+              days: { type: 'number', minimum: 1, maximum: 365 },
+              limit: { type: 'number', minimum: 1, maximum: 100 },
+            },
+            additionalProperties: false,
+          },
+        },
       ],
     };
   });
@@ -213,6 +233,17 @@ export async function startMcpServer(pool: Pool, config: AppConfig) {
           baselineDays,
           minIncreasePercent: input.minIncreasePercent ?? 40,
           minAbsoluteDelta: input.minAbsoluteDelta ?? 10,
+          limit: input.limit ?? 10,
+        });
+        return asTextResult(data);
+      }
+
+      if (name === 'transactions_credit_card_spending') {
+        const input = creditCardSpendingInputSchema.parse(args);
+        const ownerId = resolveOwnerId(input.ownerId, config);
+        const data = await getCreditCardSpending(pool, {
+          ownerId,
+          days: input.days ?? config.DEFAULT_LOOKBACK_DAYS,
           limit: input.limit ?? 10,
         });
         return asTextResult(data);
