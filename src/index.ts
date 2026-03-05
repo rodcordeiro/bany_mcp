@@ -25,6 +25,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error('[bany_mcp] fatal error', error);
+  console.error('[banky_mcp] fatal error', error);
   process.exit(1);
 });
