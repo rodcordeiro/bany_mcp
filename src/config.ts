@@ -10,7 +10,7 @@ const envSchema = z.object({
   DEFAULT_OWNER_ID: z.string().optional(),
   DEFAULT_LOOKBACK_DAYS: z.coerce.number().int().min(1).max(365).default(30),
   MCP_SERVER_NAME: z.string().min(1).default('bany-mcp'),
-  MCP_SERVER_VERSION: z.string().min(1).default('0.1.1'),
+  MCP_SERVER_VERSION: z.string().min(1).default('0.2.0'),
 });
 
 export type AppConfig = z.infer<typeof envSchema>;

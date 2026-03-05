@@ -12,6 +12,10 @@ MCP server em Node.js + TypeScript para analise e acompanhamento de transacoes d
   - `transactions_list`: listagem paginada com filtros
   - `transactions_detect_anomalies`: deteccao de anomalias de gasto
   - `transactions_credit_card_spending`: total gasto em contas de cartao de credito no periodo
+  - `feedbacks_overview`: volume de feedbacks, distribuicao por status, cobertura de treino e tendencia diaria
+  - `feedbacks_list`: listagem paginada de feedbacks com filtros por status, uso em treino e busca textual
+  - `feedbacks_quality`: qualidade por campo comparando `predictedJson` vs `userCorrectedJson`
+  - `feedbacks_training_queue`: fila apta para treino (`status != pending` e `usedForTraining = false`)
 
 ## Requisitos
 

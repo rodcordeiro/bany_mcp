@@ -10,14 +10,20 @@ import { z } from 'zod';
 import type { AppConfig } from './config.js';
 import {
   detectExpenseAnomalies,
+  getFeedbackOverview,
+  getFeedbackQuality,
+  getFeedbackTrainingQueue,
   getCreditCardSpending,
   getOverview,
   getTimeline,
+  listFeedbacks,
   listTransactions,
+  type FeedbackStatus,
   type SyncStatus,
 } from './analytics.js';
 
 const statusEnum = z.enum(['all', 'pending', 'processing', 'done', 'error']);
+const feedbackStatusEnum = z.enum(['all', 'pending', 'validated', 'corrected']);
 
 const overviewInputSchema = z.object({
   ownerId: z.string().min(1).optional(),
@@ -48,6 +54,32 @@ const anomaliesInputSchema = z.object({
 });
 
 const creditCardSpendingInputSchema = z.object({
+  ownerId: z.string().min(1).optional(),
+  days: z.number().int().min(1).max(365).optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+});
+
+const feedbackOverviewInputSchema = z.object({
+  ownerId: z.string().min(1).optional(),
+  days: z.number().int().min(1).max(365).optional(),
+});
+
+const feedbackListInputSchema = z.object({
+  ownerId: z.string().min(1).optional(),
+  days: z.number().int().min(1).max(365).optional(),
+  status: feedbackStatusEnum.optional(),
+  usedForTraining: z.boolean().optional(),
+  search: z.string().optional(),
+  limit: z.number().int().min(1).max(200).optional(),
+  offset: z.number().int().min(0).optional(),
+});
+
+const feedbackQualityInputSchema = z.object({
+  ownerId: z.string().min(1).optional(),
+  days: z.number().int().min(1).max(365).optional(),
+});
+
+const feedbackTrainingQueueInputSchema = z.object({
   ownerId: z.string().min(1).optional(),
   days: z.number().int().min(1).max(365).optional(),
   limit: z.number().int().min(1).max(100).optional(),
@@ -178,6 +210,63 @@ export async function startMcpServer(pool: Pool, config: AppConfig) {
             additionalProperties: false,
           },
         },
+        {
+          name: 'feedbacks_overview',
+          description:
+            'Returns feedback volume, status distribution, training usage and daily trend for the selected period.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              ownerId: { type: 'string' },
+              days: { type: 'number', minimum: 1, maximum: 365 },
+            },
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'feedbacks_list',
+          description: 'Returns paginated feedback list with filters by status, training usage and search text.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              ownerId: { type: 'string' },
+              days: { type: 'number', minimum: 1, maximum: 365 },
+              status: { type: 'string', enum: ['all', 'pending', 'validated', 'corrected'] },
+              usedForTraining: { type: 'boolean' },
+              search: { type: 'string' },
+              limit: { type: 'number', minimum: 1, maximum: 200 },
+              offset: { type: 'number', minimum: 0 },
+            },
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'feedbacks_quality',
+          description:
+            'Compares predicted and corrected feedback fields to estimate model quality by intent, category, account and value.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              ownerId: { type: 'string' },
+              days: { type: 'number', minimum: 1, maximum: 365 },
+            },
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'feedbacks_training_queue',
+          description:
+            'Returns feedbacks eligible for training (non-pending and not usedForTraining), including status summary and samples.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              ownerId: { type: 'string' },
+              days: { type: 'number', minimum: 1, maximum: 365 },
+              limit: { type: 'number', minimum: 1, maximum: 100 },
+            },
+            additionalProperties: false,
+          },
+        },
       ],
     };
   });
@@ -245,6 +334,48 @@ export async function startMcpServer(pool: Pool, config: AppConfig) {
           ownerId,
           days: input.days ?? config.DEFAULT_LOOKBACK_DAYS,
           limit: input.limit ?? 10,
+        });
+        return asTextResult(data);
+      }
+
+      if (name === 'feedbacks_overview') {
+        const input = feedbackOverviewInputSchema.parse(args);
+        const data = await getFeedbackOverview(pool, {
+          ownerId: input.ownerId ?? config.DEFAULT_OWNER_ID,
+          days: input.days ?? config.DEFAULT_LOOKBACK_DAYS,
+        });
+        return asTextResult(data);
+      }
+
+      if (name === 'feedbacks_list') {
+        const input = feedbackListInputSchema.parse(args);
+        const data = await listFeedbacks(pool, {
+          ownerId: input.ownerId ?? config.DEFAULT_OWNER_ID,
+          days: input.days ?? config.DEFAULT_LOOKBACK_DAYS,
+          status: (input.status ?? 'all') as 'all' | FeedbackStatus,
+          usedForTraining: input.usedForTraining,
+          search: input.search,
+          limit: input.limit ?? 50,
+          offset: input.offset ?? 0,
+        });
+        return asTextResult(data);
+      }
+
+      if (name === 'feedbacks_quality') {
+        const input = feedbackQualityInputSchema.parse(args);
+        const data = await getFeedbackQuality(pool, {
+          ownerId: input.ownerId ?? config.DEFAULT_OWNER_ID,
+          days: input.days ?? config.DEFAULT_LOOKBACK_DAYS,
+        });
+        return asTextResult(data);
+      }
+
+      if (name === 'feedbacks_training_queue') {
+        const input = feedbackTrainingQueueInputSchema.parse(args);
+        const data = await getFeedbackTrainingQueue(pool, {
+          ownerId: input.ownerId ?? config.DEFAULT_OWNER_ID,
+          days: input.days ?? config.DEFAULT_LOOKBACK_DAYS,
+          limit: input.limit ?? 20,
         });
         return asTextResult(data);
       }

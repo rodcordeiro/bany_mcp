@@ -36,6 +36,34 @@ export type CreditCardSpendingParams = {
   limit: number;
 };
 
+export type FeedbackStatus = 'pending' | 'validated' | 'corrected';
+
+export type FeedbackOverviewParams = {
+  ownerId?: string;
+  days: number;
+};
+
+export type ListFeedbackParams = {
+  ownerId?: string;
+  days: number;
+  status: 'all' | FeedbackStatus;
+  usedForTraining?: boolean;
+  search?: string;
+  limit: number;
+  offset: number;
+};
+
+export type FeedbackQualityParams = {
+  ownerId?: string;
+  days: number;
+};
+
+export type FeedbackTrainingQueueParams = {
+  ownerId?: string;
+  days: number;
+  limit: number;
+};
+
 type TotalsRow = RowDataPacket & {
   income: number | null;
   expense: number | null;
@@ -94,6 +122,46 @@ type CreditCardAccountRow = RowDataPacket & {
   transactions: number | null;
 };
 
+type FeedbackTotalsRow = RowDataPacket & {
+  total: number | null;
+  pending: number | null;
+  validated: number | null;
+  corrected: number | null;
+  used_for_training: number | null;
+};
+
+type FeedbackDailyRow = RowDataPacket & {
+  date: string;
+  total: number | null;
+  corrected: number | null;
+};
+
+type FeedbackListRow = RowDataPacket & {
+  id: string;
+  originalText: string | null;
+  predictedJson: unknown;
+  userCorrectedJson: unknown;
+  status: FeedbackStatus | null;
+  usedForTraining: number | boolean | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+type FeedbackQualityRow = RowDataPacket & {
+  total_compared: number | null;
+  intent_matches: number | null;
+  category_matches: number | null;
+  account_matches: number | null;
+  value_matches: number | null;
+};
+
+type FeedbackQueueStatusRow = RowDataPacket & {
+  status: FeedbackStatus | null;
+  total: number | null;
+};
+
+const tableCache = new Map<string, boolean>();
+
 const columnCache = new Map<string, boolean>();
 
 function toNumber(value: unknown): number {
@@ -122,12 +190,35 @@ async function hasColumn(pool: Pool, tableName: string, columnName: string) {
   return exists;
 }
 
+async function hasTable(pool: Pool, tableName: string) {
+  const cached = tableCache.get(tableName);
+  if (cached !== undefined) return cached;
+
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `
+      select count(*) as total
+      from information_schema.tables
+      where table_schema = database()
+        and table_name = ?
+    `,
+    [tableName]
+  );
+
+  const exists = toNumber(rows[0]?.total) > 0;
+  tableCache.set(tableName, exists);
+  return exists;
+}
+
 async function hasTransactionColumn(pool: Pool, columnName: string) {
   return hasColumn(pool, 'bk_tb_transactions', columnName);
 }
 
 async function hasCategoryColumn(pool: Pool, columnName: string) {
   return hasColumn(pool, 'bk_tb_categories', columnName);
+}
+
+async function hasFeedbackColumn(pool: Pool, columnName: string) {
+  return hasColumn(pool, 'bk_nlp_feedback', columnName);
 }
 
 export async function getOverview(pool: Pool, params: OverviewParams) {
@@ -440,5 +531,286 @@ export async function detectExpenseAnomalies(pool: Pool, params: AnomalyParams) 
       minAbsoluteDelta: params.minAbsoluteDelta,
     },
     anomalies,
+  };
+}
+
+function buildFeedbackFilters(
+  hasOwner: boolean,
+  params: {
+    ownerId?: string;
+    days: number;
+    status?: 'all' | FeedbackStatus;
+    usedForTraining?: boolean;
+    search?: string;
+  }
+) {
+  const conditions: string[] = [
+    'date(coalesce(f.created_at, current_timestamp)) >= date_sub(curdate(), interval ? day)',
+  ];
+  const values: unknown[] = [params.days];
+
+  if (hasOwner && params.ownerId) {
+    conditions.push('f.owner = ?');
+    values.push(params.ownerId);
+  }
+
+  if (params.status && params.status !== 'all') {
+    conditions.push('f.status = ?');
+    values.push(params.status);
+  }
+
+  if (typeof params.usedForTraining === 'boolean') {
+    conditions.push('coalesce(f.usedForTraining, 0) = ?');
+    values.push(params.usedForTraining ? 1 : 0);
+  }
+
+  if (params.search && params.search.trim().length > 0) {
+    conditions.push("lower(coalesce(f.originalText, '')) like ?");
+    values.push(`%${params.search.trim().toLowerCase()}%`);
+  }
+
+  return { conditions, values };
+}
+
+export async function getFeedbackOverview(pool: Pool, params: FeedbackOverviewParams) {
+  const feedbackTableExists = await hasTable(pool, 'bk_nlp_feedback');
+  if (!feedbackTableExists) {
+    throw new Error('Feedback table bk_nlp_feedback not found in the connected database.');
+  }
+
+  const hasOwner = await hasFeedbackColumn(pool, 'owner');
+  const { conditions, values } = buildFeedbackFilters(hasOwner, {
+    ownerId: params.ownerId,
+    days: params.days,
+  });
+
+  const [totalsRows] = await pool.query<FeedbackTotalsRow[]>(
+    `
+      select
+        count(*) as total,
+        coalesce(sum(case when f.status = 'pending' then 1 else 0 end), 0) as pending,
+        coalesce(sum(case when f.status = 'validated' then 1 else 0 end), 0) as validated,
+        coalesce(sum(case when f.status = 'corrected' then 1 else 0 end), 0) as corrected,
+        coalesce(sum(case when coalesce(f.usedForTraining, 0) = 1 then 1 else 0 end), 0) as used_for_training
+      from bk_nlp_feedback f
+      where ${conditions.join(' and ')}
+    `,
+    values
+  );
+
+  const [dailyRows] = await pool.query<FeedbackDailyRow[]>(
+    `
+      select
+        date(coalesce(f.created_at, current_timestamp)) as date,
+        count(*) as total,
+        coalesce(sum(case when f.status = 'corrected' then 1 else 0 end), 0) as corrected
+      from bk_nlp_feedback f
+      where ${conditions.join(' and ')}
+      group by date(coalesce(f.created_at, current_timestamp))
+      order by date asc
+    `,
+    values
+  );
+
+  const totals = totalsRows[0];
+  const total = toNumber(totals?.total);
+  const corrected = toNumber(totals?.corrected);
+  const usedForTraining = toNumber(totals?.used_for_training);
+
+  return {
+    periodDays: params.days,
+    total,
+    pending: toNumber(totals?.pending),
+    validated: toNumber(totals?.validated),
+    corrected,
+    usedForTraining,
+    correctedRate: total > 0 ? corrected / total : 0,
+    trainingCoverageRate: total > 0 ? usedForTraining / total : 0,
+    daily: dailyRows.map((row) => ({
+      date: row.date,
+      total: toNumber(row.total),
+      corrected: toNumber(row.corrected),
+    })),
+  };
+}
+
+export async function listFeedbacks(pool: Pool, params: ListFeedbackParams) {
+  const feedbackTableExists = await hasTable(pool, 'bk_nlp_feedback');
+  if (!feedbackTableExists) {
+    throw new Error('Feedback table bk_nlp_feedback not found in the connected database.');
+  }
+
+  const hasOwner = await hasFeedbackColumn(pool, 'owner');
+  const { conditions, values } = buildFeedbackFilters(hasOwner, params);
+  const queryValues = [...values, params.limit, params.offset];
+
+  const [rows] = await pool.query<FeedbackListRow[]>(
+    `
+      select
+        f.id,
+        f.originalText,
+        f.predictedJson,
+        f.userCorrectedJson,
+        f.status,
+        f.usedForTraining,
+        f.created_at,
+        f.updated_at
+      from bk_nlp_feedback f
+      where ${conditions.join(' and ')}
+      order by f.created_at desc
+      limit ? offset ?
+    `,
+    queryValues
+  );
+
+  return {
+    periodDays: params.days,
+    status: params.status,
+    usedForTraining: params.usedForTraining ?? null,
+    search: params.search ?? null,
+    limit: params.limit,
+    offset: params.offset,
+    feedbacks: rows.map((row) => ({
+      id: row.id,
+      originalText: row.originalText ?? '',
+      predictedJson: row.predictedJson ?? null,
+      userCorrectedJson: row.userCorrectedJson ?? null,
+      status: row.status ?? 'pending',
+      usedForTraining: Boolean(row.usedForTraining),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    })),
+  };
+}
+
+export async function getFeedbackQuality(pool: Pool, params: FeedbackQualityParams) {
+  const feedbackTableExists = await hasTable(pool, 'bk_nlp_feedback');
+  if (!feedbackTableExists) {
+    throw new Error('Feedback table bk_nlp_feedback not found in the connected database.');
+  }
+
+  const hasOwner = await hasFeedbackColumn(pool, 'owner');
+  const { conditions, values } = buildFeedbackFilters(hasOwner, {
+    ownerId: params.ownerId,
+    days: params.days,
+  });
+  conditions.push('f.userCorrectedJson is not null');
+
+  const [rows] = await pool.query<FeedbackQualityRow[]>(
+    `
+      select
+        count(*) as total_compared,
+        coalesce(sum(case
+          when json_unquote(json_extract(f.predictedJson, '$.intent')) =
+               json_unquote(json_extract(f.userCorrectedJson, '$.intent'))
+          then 1 else 0 end), 0) as intent_matches,
+        coalesce(sum(case
+          when json_unquote(json_extract(f.predictedJson, '$.category')) =
+               json_unquote(json_extract(f.userCorrectedJson, '$.category'))
+          then 1 else 0 end), 0) as category_matches,
+        coalesce(sum(case
+          when json_unquote(json_extract(f.predictedJson, '$.account')) =
+               json_unquote(json_extract(f.userCorrectedJson, '$.account'))
+          then 1 else 0 end), 0) as account_matches,
+        coalesce(sum(case
+          when json_unquote(json_extract(f.predictedJson, '$.value')) =
+               json_unquote(json_extract(f.userCorrectedJson, '$.value'))
+          then 1 else 0 end), 0) as value_matches
+      from bk_nlp_feedback f
+      where ${conditions.join(' and ')}
+    `,
+    values
+  );
+
+  const quality = rows[0];
+  const totalCompared = toNumber(quality?.total_compared);
+  const intentMatches = toNumber(quality?.intent_matches);
+  const categoryMatches = toNumber(quality?.category_matches);
+  const accountMatches = toNumber(quality?.account_matches);
+  const valueMatches = toNumber(quality?.value_matches);
+
+  const safeRate = (matches: number) => (totalCompared > 0 ? matches / totalCompared : 0);
+
+  return {
+    periodDays: params.days,
+    totalCompared,
+    fields: {
+      intent: { matches: intentMatches, accuracy: safeRate(intentMatches) },
+      category: { matches: categoryMatches, accuracy: safeRate(categoryMatches) },
+      account: { matches: accountMatches, accuracy: safeRate(accountMatches) },
+      value: { matches: valueMatches, accuracy: safeRate(valueMatches) },
+    },
+  };
+}
+
+export async function getFeedbackTrainingQueue(pool: Pool, params: FeedbackTrainingQueueParams) {
+  const feedbackTableExists = await hasTable(pool, 'bk_nlp_feedback');
+  if (!feedbackTableExists) {
+    throw new Error('Feedback table bk_nlp_feedback not found in the connected database.');
+  }
+
+  const hasOwner = await hasFeedbackColumn(pool, 'owner');
+  const { conditions, values } = buildFeedbackFilters(hasOwner, {
+    ownerId: params.ownerId,
+    days: params.days,
+  });
+  conditions.push("f.status <> 'pending'");
+  conditions.push('coalesce(f.usedForTraining, 0) = 0');
+
+  const [countRows] = await pool.query<RowDataPacket[]>(
+    `
+      select count(*) as total
+      from bk_nlp_feedback f
+      where ${conditions.join(' and ')}
+    `,
+    values
+  );
+
+  const [statusRows] = await pool.query<FeedbackQueueStatusRow[]>(
+    `
+      select
+        f.status,
+        count(*) as total
+      from bk_nlp_feedback f
+      where ${conditions.join(' and ')}
+      group by f.status
+    `,
+    values
+  );
+
+  const [sampleRows] = await pool.query<FeedbackListRow[]>(
+    `
+      select
+        f.id,
+        f.originalText,
+        f.predictedJson,
+        f.userCorrectedJson,
+        f.status,
+        f.usedForTraining,
+        f.created_at,
+        f.updated_at
+      from bk_nlp_feedback f
+      where ${conditions.join(' and ')}
+      order by f.created_at desc
+      limit ?
+    `,
+    [...values, params.limit]
+  );
+
+  return {
+    periodDays: params.days,
+    pendingTrainingTotal: toNumber(countRows[0]?.total),
+    byStatus: statusRows.map((row) => ({
+      status: row.status ?? 'pending',
+      total: toNumber(row.total),
+    })),
+    samples: sampleRows.map((row) => ({
+      id: row.id,
+      originalText: row.originalText ?? '',
+      predictedJson: row.predictedJson ?? null,
+      userCorrectedJson: row.userCorrectedJson ?? null,
+      status: row.status ?? 'pending',
+      createdAt: row.created_at,
+    })),
   };
 }
