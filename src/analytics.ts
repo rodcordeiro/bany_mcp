@@ -169,6 +169,50 @@ function toNumber(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function escapeSqlString(value: string) {
+  return value.replace(/'/g, "''");
+}
+
+function normalizeSqlText(expression: string) {
+  const replacements: Array<[string, string]> = [
+    ['á', 'a'],
+    ['à', 'a'],
+    ['ã', 'a'],
+    ['â', 'a'],
+    ['ä', 'a'],
+    ['é', 'e'],
+    ['è', 'e'],
+    ['ê', 'e'],
+    ['ë', 'e'],
+    ['í', 'i'],
+    ['ì', 'i'],
+    ['î', 'i'],
+    ['ï', 'i'],
+    ['ó', 'o'],
+    ['ò', 'o'],
+    ['õ', 'o'],
+    ['ô', 'o'],
+    ['ö', 'o'],
+    ['ú', 'u'],
+    ['ù', 'u'],
+    ['û', 'u'],
+    ['ü', 'u'],
+    ['ç', 'c'],
+    ['?', ''],
+  ];
+
+  let normalized = `lower(trim(coalesce(${expression}, '')))`;
+  for (const [from, to] of replacements) {
+    normalized = `replace(${normalized}, '${escapeSqlString(from)}', '${escapeSqlString(to)}')`;
+  }
+
+  return normalized;
+}
+
+function jsonText(pathSource: string, jsonPath: string) {
+  return `json_unquote(json_extract(${pathSource}, '${escapeSqlString(jsonPath)}'))`;
+}
+
 async function hasColumn(pool: Pool, tableName: string, columnName: string) {
   const cacheKey = `${tableName}:${columnName}`;
   const cached = columnCache.get(cacheKey);
@@ -696,25 +740,42 @@ export async function getFeedbackQuality(pool: Pool, params: FeedbackQualityPara
   });
   conditions.push('f.userCorrectedJson is not null');
 
+  const predictedIntent = normalizeSqlText(jsonText('f.predictedJson', '$.intent'));
+  const correctedIntent = normalizeSqlText(jsonText('f.userCorrectedJson', '$.intent'));
+  const predictedCategory = normalizeSqlText(jsonText('f.predictedJson', '$.category'));
+  const correctedCategory = normalizeSqlText(jsonText('f.userCorrectedJson', '$.category'));
+  const predictedAccount = normalizeSqlText(jsonText('f.predictedJson', '$.account'));
+  const correctedAccount = normalizeSqlText(jsonText('f.userCorrectedJson', '$.account'));
+  const predictedOrigin = normalizeSqlText(jsonText('f.predictedJson', '$.origin'));
+  const correctedOrigin = normalizeSqlText(jsonText('f.userCorrectedJson', '$.origin'));
+  const predictedDestiny = normalizeSqlText(jsonText('f.predictedJson', '$.destiny'));
+  const correctedDestiny = normalizeSqlText(jsonText('f.userCorrectedJson', '$.destiny'));
+  const predictedValue = `coalesce(${jsonText('f.predictedJson', '$.value')}, '')`;
+  const correctedValue = `coalesce(${jsonText('f.userCorrectedJson', '$.value')}, '')`;
+  const accountMatch = `
+    case
+      when ${predictedIntent} = 'transfer' and ${correctedIntent} = 'transfer'
+      then case when ${predictedOrigin} = ${correctedOrigin} and ${predictedDestiny} = ${correctedDestiny} then 1 else 0 end
+      when ${predictedIntent} = 'transfer' or ${correctedIntent} = 'transfer'
+      then 0
+      when ${predictedAccount} = ${correctedAccount}
+      then 1 else 0
+    end
+  `;
+
   const [rows] = await pool.query<FeedbackQualityRow[]>(
     `
       select
         count(*) as total_compared,
         coalesce(sum(case
-          when json_unquote(json_extract(f.predictedJson, '$.intent')) =
-               json_unquote(json_extract(f.userCorrectedJson, '$.intent'))
+          when ${predictedIntent} = ${correctedIntent}
           then 1 else 0 end), 0) as intent_matches,
         coalesce(sum(case
-          when json_unquote(json_extract(f.predictedJson, '$.category')) =
-               json_unquote(json_extract(f.userCorrectedJson, '$.category'))
+          when ${predictedCategory} = ${correctedCategory}
           then 1 else 0 end), 0) as category_matches,
+        coalesce(sum(${accountMatch}), 0) as account_matches,
         coalesce(sum(case
-          when json_unquote(json_extract(f.predictedJson, '$.account')) =
-               json_unquote(json_extract(f.userCorrectedJson, '$.account'))
-          then 1 else 0 end), 0) as account_matches,
-        coalesce(sum(case
-          when json_unquote(json_extract(f.predictedJson, '$.value')) =
-               json_unquote(json_extract(f.userCorrectedJson, '$.value'))
+          when ${predictedValue} = ${correctedValue}
           then 1 else 0 end), 0) as value_matches
       from bk_nlp_feedback f
       where ${conditions.join(' and ')}
