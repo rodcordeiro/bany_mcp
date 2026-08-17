@@ -1,0 +1,12 @@
+interface:
+  display_name: "Banky MCP Tools"
+  short_description: "Consultar transacoes e feedbacks do Banky"
+  default_prompt: "Use $banky-mcp-tools para consultar e interpretar dados do Banky com as tools MCP adequadas."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "banky"
+      description: "Servidor MCP read-only de analytics do Banky"
+      transport: "stdio"
+policy:
+  allow_implicit_invocation: true

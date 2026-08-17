@@ -17,6 +17,7 @@ Arquivos:
 - `src/config.ts`: schema Zod das variaveis de ambiente.
 - `src/db.ts`: criacao do pool MySQL.
 - `README.md`: setup e inventario de tools.
+- `.agents/skills/banky-mcp-tools/`: skill local para selecionar, combinar e interpretar as tools do MCP Banky.
 
 Artefatos:
 

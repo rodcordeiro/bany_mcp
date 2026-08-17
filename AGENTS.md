@@ -11,6 +11,7 @@ Repo Nero o projeto foi registrado como `bany-mcp`.
 | Entender entrypoint e pastas | `.agents/references/structure.md` |
 | Entender runtime, transporte e config | `.agents/references/runtime.md` |
 | Entender tools e contratos MCP | `.agents/references/contracts.md` |
+| Consultar dados pelas tools Banky | `$banky-mcp-tools` em `.agents/skills/banky-mcp-tools/` |
 | Entender fronteiras de seguranca | `.agents/references/security.md` |
 | Mudar queries, tools ou validacao | `.agents/references/conventions.md` |
 | Avaliar gaps conhecidos | `.agents/references/tech-debt.md` |
@@ -19,6 +20,7 @@ Repo Nero o projeto foi registrado como `bany-mcp`.
 ## Regras Rapidas
 
 - Use `$nero` para contexto de knowledge.
+- Use `$banky-mcp-tools` para consultas de transacoes e feedbacks via MCP Banky.
 - Preserve o transporte stdio; stdout pertence ao JSON-RPC.
 - Nao logue segredos, connection strings, valores de `.env` ou payloads sensiveis.
 - Tools devem manter schema explicito e erro sem ecoar valor sensivel.
@@ -36,3 +38,4 @@ Repo Nero o projeto foi registrado como `bany-mcp`.
 
 - Sempre: `$nero`.
 - MCP: `$nero` -> `references/guidelines/mcp-guidelines.md`.
+- Analytics Banky: `$banky-mcp-tools`.
