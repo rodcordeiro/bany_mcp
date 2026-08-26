@@ -8,6 +8,8 @@ Repo Nero o projeto foi registrado como `bany-mcp`.
 
 | Quando | Ler |
 | --- | --- |
+| Glossario (Net vs Saldo, Feedback legado) | `CONTEXT.md` |
+| Spec grelhada de *contrato* | `docs/spec-contrato-e-dominio.md` |
 | Entender entrypoint e pastas | `.agents/references/structure.md` |
 | Entender runtime, transporte e config | `.agents/references/runtime.md` |
 | Entender tools e contratos MCP | `.agents/references/contracts.md` |
