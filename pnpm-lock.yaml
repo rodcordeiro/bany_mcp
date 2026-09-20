@@ -12,8 +12,8 @@ importers:
         specifier: ^1.17.4
         version: 1.27.1(zod@4.3.6)
       dotenv:
-        specifier: ^17.2.2
-        version: 17.3.1
+        specifier: ^18.0.0
+        version: 18.0.1
       mysql2:
         specifier: ^3.14.5
         version: 3.18.2(@types/node@24.11.0)
@@ -284,9 +284,10 @@ packages:
     resolution: {integrity: sha512-g7nH6P6dyDioJogAAGprGpCtVImJhpPk/roCzdb3fIh61/s/nPsfR6onyMwkCAR/OlC3yBC0lESvUoQEAssIrw==}
     engines: {node: '>= 0.8'}
 
-  dotenv@17.3.1:
-    resolution: {integrity: sha512-IO8C/dzEb6O3F9/twg6ZLXz164a2fhTnEWb95H23Dm4OuN+92NmEAlTrupP9VW6Jm3sO26tQlqyvyi4CsnY9GA==}
+  dotenv@18.0.1:
+    resolution: {integrity: sha512-0eR4m4D/jH5eaI3evo2ZqqMii5mrTCR12v12VChdie6O1gPHs7XAjzTep0CWc1Bd+oNx3vVfbi734dK4zghigw==}
     engines: {node: '>=12'}
+    hasBin: true
 
   dunder-proto@1.0.1:
     resolution: {integrity: sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==}
@@ -807,7 +808,7 @@ snapshots:
 
   depd@2.0.0: {}
 
-  dotenv@17.3.1: {}
+  dotenv@18.0.1: {}
 
   dunder-proto@1.0.1:
     dependencies:
